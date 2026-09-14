@@ -1,11 +1,7 @@
 import { Router } from "express";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { z } from "zod";
 import { authProfileSocialStore, type AccountStatus } from "./store.js";
-
-const AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
-const AUTH_RATE_LIMIT_MAX_ATTEMPTS = 15;
-const authRouteWindowStarts = new Map<string, number>();
-const authRouteAttempts = new Map<string, number>();
 
 const mapErrorToStatus = (error: unknown): number => {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
@@ -42,24 +38,16 @@ const authProviderPayloadSchema = z.object({ auth_provider_id: z.string().min(1)
 
 export const authRouter = Router();
 
-const isAuthRateLimited = (key: string): boolean => {
-  const currentTime = Date.now();
-  const windowStart = authRouteWindowStarts.get(key);
-  const attempts = authRouteAttempts.get(key) ?? 0;
-
-  if (!windowStart || currentTime - windowStart >= AUTH_RATE_LIMIT_WINDOW_MS) {
-    authRouteWindowStarts.set(key, currentTime);
-    authRouteAttempts.set(key, 1);
-    return false;
-  }
-
-  if (attempts >= AUTH_RATE_LIMIT_MAX_ATTEMPTS) {
-    return true;
-  }
-
-  authRouteAttempts.set(key, attempts + 1);
-  return false;
-};
+const authActionLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req): string =>
+    typeof req.body?.auth_provider_id === "string" && req.body.auth_provider_id.length > 0
+      ? req.body.auth_provider_id
+      : ipKeyGenerator(req.ip ?? "unknown-ip")
+});
 
 authRouter.post("/register", (req, res) => {
   const body = registerSchema.safeParse(req.body);
@@ -83,14 +71,10 @@ authRouter.post("/register", (req, res) => {
   }
 });
 
-authRouter.post("/login", (req, res) => {
+authRouter.post("/login", authActionLimiter, (req, res) => {
   const body = authProviderPayloadSchema.safeParse(req.body);
   if (!body.success) {
     return res.status(400).json({ error: "Invalid payload" });
-  }
-
-  if (isAuthRateLimited(`login:${body.data.auth_provider_id}`)) {
-    return res.status(429).json({ error: "Too many login attempts" });
   }
 
   try {
@@ -101,7 +85,7 @@ authRouter.post("/login", (req, res) => {
   }
 });
 
-authRouter.post("/logout", (req, res) => {
+authRouter.post("/logout", authActionLimiter, (req, res) => {
   const body = authProviderPayloadSchema.safeParse(req.body);
   if (!body.success) {
     return res.status(400).json({ error: "Invalid payload" });
@@ -115,14 +99,10 @@ authRouter.post("/logout", (req, res) => {
   }
 });
 
-authRouter.post("/verify", (req, res) => {
+authRouter.post("/verify", authActionLimiter, (req, res) => {
   const body = authProviderPayloadSchema.safeParse(req.body);
   if (!body.success) {
     return res.status(400).json({ error: "Invalid payload" });
-  }
-
-  if (isAuthRateLimited(`verify:${body.data.auth_provider_id}`)) {
-    return res.status(429).json({ error: "Too many verification attempts" });
   }
 
   try {
@@ -133,7 +113,7 @@ authRouter.post("/verify", (req, res) => {
   }
 });
 
-authRouter.post("/recover", (req, res) => {
+authRouter.post("/recover", authActionLimiter, (req, res) => {
   const body = authProviderPayloadSchema.safeParse(req.body);
   if (!body.success) {
     return res.status(400).json({ error: "Invalid payload" });
@@ -147,7 +127,7 @@ authRouter.post("/recover", (req, res) => {
   }
 });
 
-authRouter.post("/status", (req, res) => {
+authRouter.post("/status", authActionLimiter, (req, res) => {
   const body = z
     .object({
       auth_provider_id: z.string().min(1),
@@ -170,7 +150,7 @@ authRouter.post("/status", (req, res) => {
   }
 });
 
-authRouter.delete("/delete", (req, res) => {
+authRouter.delete("/delete", authActionLimiter, (req, res) => {
   const body = authProviderPayloadSchema.safeParse(req.body);
   if (!body.success) {
     return res.status(400).json({ error: "Invalid payload" });
