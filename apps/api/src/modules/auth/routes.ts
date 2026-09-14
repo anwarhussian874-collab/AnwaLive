@@ -2,6 +2,11 @@ import { Router } from "express";
 import { z } from "zod";
 import { authProfileSocialStore, type AccountStatus } from "./store.js";
 
+const AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
+const AUTH_RATE_LIMIT_MAX_ATTEMPTS = 15;
+const authRouteWindowStarts = new Map<string, number>();
+const authRouteAttempts = new Map<string, number>();
+
 const mapErrorToStatus = (error: unknown): number => {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("not found")) {
@@ -37,6 +42,25 @@ const authProviderPayloadSchema = z.object({ auth_provider_id: z.string().min(1)
 
 export const authRouter = Router();
 
+const isAuthRateLimited = (key: string): boolean => {
+  const currentTime = Date.now();
+  const windowStart = authRouteWindowStarts.get(key);
+  const attempts = authRouteAttempts.get(key) ?? 0;
+
+  if (!windowStart || currentTime - windowStart >= AUTH_RATE_LIMIT_WINDOW_MS) {
+    authRouteWindowStarts.set(key, currentTime);
+    authRouteAttempts.set(key, 1);
+    return false;
+  }
+
+  if (attempts >= AUTH_RATE_LIMIT_MAX_ATTEMPTS) {
+    return true;
+  }
+
+  authRouteAttempts.set(key, attempts + 1);
+  return false;
+};
+
 authRouter.post("/register", (req, res) => {
   const body = registerSchema.safeParse(req.body);
   if (!body.success) {
@@ -65,6 +89,10 @@ authRouter.post("/login", (req, res) => {
     return res.status(400).json({ error: "Invalid payload" });
   }
 
+  if (isAuthRateLimited(`login:${body.data.auth_provider_id}`)) {
+    return res.status(429).json({ error: "Too many login attempts" });
+  }
+
   try {
     const user = authProfileSocialStore.login(body.data.auth_provider_id);
     return res.status(200).json({ user });
@@ -91,6 +119,10 @@ authRouter.post("/verify", (req, res) => {
   const body = authProviderPayloadSchema.safeParse(req.body);
   if (!body.success) {
     return res.status(400).json({ error: "Invalid payload" });
+  }
+
+  if (isAuthRateLimited(`verify:${body.data.auth_provider_id}`)) {
+    return res.status(429).json({ error: "Too many verification attempts" });
   }
 
   try {
