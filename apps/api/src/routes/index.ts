@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { z } from "zod";
+import { authRouter } from "../modules/auth/routes.js";
+import { profilesRouter } from "../modules/profiles/routes.js";
 import { validateUsername } from "../modules/profiles/username.js";
+import { socialRouter } from "../modules/social/routes.js";
 
 export const apiRouter = Router();
 
@@ -18,3 +21,7 @@ apiRouter.post("/v1/usernames/validate", (req, res) => {
   const result = validateUsername(body.data.username);
   return res.status(200).json(result);
 });
+
+apiRouter.use("/v1/auth", authRouter);
+apiRouter.use("/v1/profiles", profilesRouter);
+apiRouter.use("/v1/social", socialRouter);
